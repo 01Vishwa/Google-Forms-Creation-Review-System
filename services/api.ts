@@ -95,9 +95,17 @@ export const authAPI = {
       isDemoMode = false
       return response.data
     } catch (error) {
-      console.debug("[v0] Backend unavailable, continuing in demo mode")
+      console.error("[v0] Backend error during Google login:", error)
+      console.debug("[v0] Falling back to demo mode")
       isDemoMode = true
-      return { user: { email: "user@example.com", name: "User" } }
+      // Return demo user data
+      return { 
+        user: { 
+          email: "demo@surveyforge.com", 
+          name: "Demo User",
+          picture: "" 
+        } 
+      }
     }
   },
   logout: async () => {

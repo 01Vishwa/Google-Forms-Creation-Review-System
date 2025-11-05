@@ -34,10 +34,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         })
         if (response.ok) {
           const userData = await response.json()
-          setUser(userData)
+          if (userData && userData.email) {
+            setUser({
+              id: userData.email,
+              email: userData.email,
+              name: userData.name,
+              picture: userData.picture
+            })
+          }
         }
       } catch (error) {
-        // This is expected in development when backend is not running
+        // This is expected in development when backend is not running or user not authenticated
         console.debug("[v0] Auth check skipped (backend unavailable or user not authenticated)")
       } finally {
         setIsLoading(false)
