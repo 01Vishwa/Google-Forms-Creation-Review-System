@@ -97,7 +97,7 @@ export default function LandingPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-accent/5 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-linear-to-br from-background via-background to-accent/5 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         {/* Logo Section */}
         <div className="text-center mb-12">
@@ -123,7 +123,7 @@ export default function LandingPage() {
           {/* Error Message */}
           {error && (
             <div className="mb-6 p-4 bg-destructive/10 border border-destructive/20 rounded-lg flex gap-3">
-              <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+              <AlertCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
               <p className="text-sm text-destructive">{error}</p>
             </div>
           )}
@@ -202,7 +202,7 @@ export default function LandingPage() {
             ].map((feature) => (
               <div key={feature.title} className="flex gap-3 text-sm">
                 <svg
-                  className="h-5 w-5 text-primary flex-shrink-0 mt-0.5"
+                  className="h-5 w-5 text-primary shrink-0 mt-0.5"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
