@@ -29,7 +29,7 @@ export function DashboardNav() {
 
   const handleLogout = async () => {
     try {
-      logout()
+      await logout()
       router.push("/")
     } catch (error) {
       console.error("[v0] Logout error:", error)

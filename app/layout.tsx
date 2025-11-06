@@ -5,6 +5,7 @@ import { Analytics } from "@vercel/analytics/next"
 import { GoogleOAuthProvider } from "@react-oauth/google"
 import { AuthProvider } from "@/context/auth-context"
 import { Toaster } from "@/components/ui/toaster"
+import { ErrorSuppression } from "./error-suppression"
 import "./globals.css"
 
 const _geist = Geist({ subsets: ["latin"] })
@@ -26,6 +27,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`font-sans antialiased`}>
+        <ErrorSuppression />
         <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
           <AuthProvider>
             {children}

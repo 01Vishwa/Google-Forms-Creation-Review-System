@@ -15,6 +15,28 @@ export default function LandingPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Suppress FedCM console errors (they're non-critical Google OAuth warnings)
+  useEffect(() => {
+    const originalError = console.error
+    console.error = (...args) => {
+      if (
+        typeof args[0] === 'string' && 
+        (args[0].includes('[GSI_LOGGER]') || 
+         args[0].includes('FedCM') ||
+         args[0].includes('AbortError') ||
+         args[0].includes('NetworkError: Error retrieving a token'))
+      ) {
+        // Suppress these specific Google FedCM warnings
+        return
+      }
+      originalError.apply(console, args)
+    }
+
+    return () => {
+      console.error = originalError
+    }
+  }, [])
+
   // Redirect to dashboard if already authenticated
   useEffect(() => {
     if (isAuthenticated) {
@@ -105,12 +127,13 @@ export default function LandingPage() {
             <GoogleLogin
               onSuccess={handleGoogleSuccess}
               onError={handleGoogleError}
-              useOneTap
+              useOneTap={false}
               theme="outline"
               size="large"
               text="signin_with"
               shape="rectangular"
               logo_alignment="left"
+              cancel_on_tap_outside={false}
             />
           </div>
 

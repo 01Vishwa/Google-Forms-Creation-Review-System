@@ -14,7 +14,7 @@ interface AuthContextType {
   isAuthenticated: boolean
   isLoading: boolean
   login: (email: string, name: string, picture?: string) => void
-  logout: () => void
+  logout: () => Promise<void>
   setUser: (user: User | null) => void
 }
 
@@ -64,8 +64,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(newUser)
   }
 
-  const logout = () => {
-    setUser(null)
+  const logout = async () => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+      // Call backend logout to clear the auth cookie
+      await fetch(`${apiUrl}/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      })
+    } catch (error) {
+      console.debug("[v0] Backend logout failed or unavailable:", error)
+    } finally {
+      // Always clear local user state regardless of backend response
+      setUser(null)
+    }
   }
 
   const value: AuthContextType = {
