@@ -106,21 +106,39 @@ export function SurveyDetailsModal({ survey, onClose, onRefresh }: SurveyDetails
 
           {/* Form URL */}
           {survey.form_url && (
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-2">Form URL</label>
-              <a
-                href={survey.form_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:underline break-all text-sm"
-              >
-                {survey.form_url}
-              </a>
+            <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg">
+              <label className="block text-sm font-medium text-foreground mb-2">📋 Google Form URL</label>
+              <div className="flex items-center gap-2">
+                <a
+                  href={survey.form_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary hover:underline break-all text-sm flex-1"
+                >
+                  {survey.form_url}
+                </a>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    navigator.clipboard.writeText(survey.form_url || "")
+                    toast({ title: "Copied!", description: "Form URL copied to clipboard" })
+                  }}
+                >
+                  Copy
+                </Button>
+              </div>
+            </div>
+          )}
+          
+          {!survey.form_url && (
+            <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <p className="text-sm text-yellow-900">⚠️ Google Form URL not available. The form may still be processing.</p>
             </div>
           )}
 
           {/* Approval Section */}
-          {survey.status === "draft" && (
+          {(survey.status === "draft" || survey.status === "pending-approval") && (
             <div className="space-y-4">
               {error && (
                 <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg flex gap-3">
@@ -156,12 +174,6 @@ export function SurveyDetailsModal({ survey, onClose, onRefresh }: SurveyDetails
             </div>
           )}
 
-          {survey.status === "pending-approval" && (
-            <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-              <p className="text-sm text-blue-900">This survey is awaiting approval. Check back soon for updates.</p>
-            </div>
-          )}
-
           {survey.status === "approved" && (
             <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
               <p className="text-sm text-green-900">
@@ -173,19 +185,19 @@ export function SurveyDetailsModal({ survey, onClose, onRefresh }: SurveyDetails
 
           {/* Actions */}
           <div className="flex gap-3 justify-end pt-4 border-t border-border flex-wrap">
-            {survey.status === "draft" && (
+            {(survey.status === "draft" || survey.status === "pending-approval") && (
               <>
                 <Button variant="outline" onClick={onClose}>
                   Cancel
                 </Button>
-                <Button onClick={handleApprove} disabled={isLoading || !recipientEmail.trim()} className="gap-2">
+                <Button onClick={handleApprove} disabled={isLoading || !recipientEmail.trim() || !survey.form_url} className="gap-2">
                   {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
                   <CheckCircle className="h-4 w-4" />
-                  {isLoading ? "Sending..." : "Send for Review"}
+                  {isLoading ? "Sending..." : "Approve & Send Email"}
                 </Button>
               </>
             )}
-            {survey.status !== "draft" && (
+            {(survey.status === "approved" || survey.status === "archived") && (
               <Button variant="outline" onClick={onClose}>
                 Close
               </Button>

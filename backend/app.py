@@ -11,6 +11,11 @@ import jwt
 from jwt import PyJWTError
 import os
 from dotenv import load_dotenv
+import json
+
+# Import our custom services
+from google_forms_service import GoogleFormsService
+from email_service import EmailService
 
 # Load environment variables
 load_dotenv()
@@ -30,12 +35,15 @@ class Survey(BaseModel):
     id: Optional[str] = None
     title: str
     description: str
+    questions: Optional[str] = None  # Text blob or JSON string containing questions
     status: str = "draft"
     createdAt: Optional[str] = None
     approvedAt: Optional[str] = None
     responseCount: int = 0
     approver: Optional[str] = None
     form_url: Optional[str] = None
+    form_id: Optional[str] = None
+    creator: Optional[str] = None
 
 class ApprovalRequest(BaseModel):
     recipient_email: str
@@ -44,6 +52,26 @@ class ApprovalRequest(BaseModel):
 # --- IN-MEMORY DATABASE (for demo) ---
 surveys_db: List[dict] = []
 users_db: dict = {}  # Store user sessions
+
+# --- INITIALIZE SERVICES ---
+try:
+    forms_service = GoogleFormsService(credentials_file="credentials.json")
+    print("✅ Google Forms service initialized")
+except FileNotFoundError as e:
+    print(f"⚠️ Google Forms service not available: {e}")
+    print("⚠️ Surveys will be created without Google Forms integration")
+    forms_service = None
+except Exception as e:
+    print(f"⚠️ Google Forms service initialization failed: {e}")
+    print("⚠️ Common issues:")
+    print("   - Google Forms API not enabled in Cloud Console")
+    print("   - Service account permissions insufficient")
+    print("   - API quota exceeded")
+    print("⚠️ Surveys will be created without Google Forms integration")
+    forms_service = None
+
+email_service = EmailService()
+print("✅ Email service initialized" if email_service.is_configured else "⚠️ Email service available but not configured")
 
 # --- FASTAPI APP ---
 app = FastAPI()
@@ -223,28 +251,124 @@ async def create_survey(
     survey: Survey,
     current_user: Optional[dict] = Depends(get_current_user)
 ):
-    """Create a new survey"""
+    """
+    Create a new survey and Google Form
+    
+    Request Body:
+    - title: Survey title
+    - description: Survey description
+    - questions: Text blob or JSON string containing questions
+    
+    The questions can be:
+    1. Plain text with newline-separated questions
+    2. JSON array of question objects
+    
+    Example plain text:
+        1. What is your name? [TEXT]
+        2. Choose your favorite color [MULTIPLE_CHOICE]
+           - Red
+           - Blue
+           - Green
+        3. Tell us about yourself [PARAGRAPH]
+    
+    Example JSON:
+        [
+            {"title": "What is your name?", "type": "TEXT", "required": true},
+            {"title": "Choose favorite color", "type": "MULTIPLE_CHOICE", "options": ["Red", "Blue", "Green"]}
+        ]
+    """
     if not current_user:
         raise HTTPException(status_code=401, detail="Authentication required")
     
-    # Generate survey ID
-    survey_id = f"survey_{len(surveys_db) + 1}_{datetime.utcnow().timestamp()}"
-    
-    survey_data = {
-        "id": survey_id,
-        "title": survey.title,
-        "description": survey.description,
-        "status": "draft",
-        "createdAt": datetime.utcnow().isoformat(),
-        "approvedAt": None,
-        "responseCount": 0,
-        "approver": None,
-        "form_url": survey.form_url,
-        "creator": current_user.get("email")
-    }
-    
-    surveys_db.append(survey_data)
-    return survey_data
+    try:
+        # Generate survey ID
+        survey_id = f"survey_{len(surveys_db) + 1}_{int(datetime.utcnow().timestamp())}"
+        
+        # Parse questions
+        questions = []
+        if survey.questions:
+            # Check if questions contains binary data (e.g., Excel file content)
+            if survey.questions.startswith('PK\x03\x04') or '\x00' in survey.questions[:100]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid questions format. Binary files (Excel, Word, etc.) are not supported. Please use plain text, JSON, or CSV format."
+                )
+            
+            try:
+                # Try to parse as JSON first
+                questions = json.loads(survey.questions)
+            except json.JSONDecodeError:
+                # If not JSON, parse as text
+                if forms_service:
+                    questions = forms_service.parse_questions_from_text(survey.questions)
+        
+        # Create Google Form if service is available
+        form_data = None
+        form_error = None
+        
+        if forms_service:
+            try:
+                form_data = forms_service.create_form(
+                    title=survey.title,
+                    description=survey.description,
+                    questions=questions if questions else None,
+                    owner_email=current_user.get("email")  # Share form with creator
+                )
+                print(f"✅ Created Google Form: {form_data['form_id']}")
+            except Exception as e:
+                form_error = str(e)
+                print(f"❌ Error creating Google Form: {e}")
+                # Check for common errors
+                if "403" in str(e) or "forbidden" in str(e).lower():
+                    print("⚠️ Permission denied. Check service account permissions.")
+                elif "500" in str(e) or "internal" in str(e).lower():
+                    print("⚠️ Google Forms API internal error. This may be temporary.")
+                    print("⚠️ Possible fixes:")
+                    print("   1. Wait a few minutes and try again")
+                    print("   2. Verify Google Forms API is enabled")
+                    print("   3. Check API quotas in Cloud Console")
+                elif "404" in str(e):
+                    print("⚠️ API endpoint not found. Verify Google Forms API is enabled.")
+                # Continue without form - survey will be created without form_url
+        else:
+            form_error = "Google Forms service not initialized"
+        
+        # Create survey data
+        survey_data = {
+            "id": survey_id,
+            "title": survey.title,
+            "description": survey.description,
+            "questions": survey.questions,
+            "status": "draft",
+            "createdAt": datetime.utcnow().isoformat(),
+            "approvedAt": None,
+            "responseCount": 0,
+            "approver": None,
+            "form_url": form_data['form_url'] if form_data else None,
+            "form_id": form_data['form_id'] if form_data else None,
+            "edit_url": form_data.get('edit_url') if form_data else None,
+            "creator": current_user.get("email")
+        }
+        
+        surveys_db.append(survey_data)
+        
+        response_message = "Survey created successfully"
+        if form_data:
+            response_message += " with Google Form"
+        elif form_error:
+            response_message += f" (Google Form creation failed: {form_error})"
+        else:
+            response_message += " (Google Forms integration not available)"
+        
+        return {
+            **survey_data,
+            "message": response_message,
+            "form_created": bool(form_data)
+        }
+        
+    except Exception as e:
+        print(f"❌ Error creating survey: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating survey: {str(e)}")
 
 @app.patch("/surveys/{survey_id}")
 async def update_survey(
@@ -252,13 +376,47 @@ async def update_survey(
     survey_update: dict,
     current_user: Optional[dict] = Depends(get_current_user)
 ):
-    """Update a survey"""
+    """
+    Update a survey
+    
+    Supports partial updates of survey fields.
+    Status transitions are validated:
+    - draft -> pending-approval, approved, archived
+    - pending-approval -> draft, approved, archived
+    - approved -> archived
+    - archived -> (no transitions allowed)
+    """
     if not current_user:
         raise HTTPException(status_code=401, detail="Authentication required")
     
     survey = next((s for s in surveys_db if s["id"] == survey_id), None)
     if not survey:
         raise HTTPException(status_code=404, detail="Survey not found")
+    
+    # Validate status transitions if status is being updated
+    if "status" in survey_update:
+        new_status = survey_update["status"]
+        current_status = survey.get("status", "draft")
+        
+        # Define valid transitions
+        valid_transitions = {
+            "draft": ["pending-approval", "approved", "archived"],
+            "pending-approval": ["draft", "approved", "archived"],
+            "approved": ["archived"],
+            "archived": []
+        }
+        
+        if current_status not in valid_transitions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid current status: {current_status}"
+            )
+        
+        if new_status not in valid_transitions[current_status]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status transition from '{current_status}' to '{new_status}'. Allowed: {valid_transitions[current_status]}"
+            )
     
     # Update survey fields
     for key, value in survey_update.items():
@@ -289,19 +447,75 @@ async def approve_survey(
     approval: ApprovalRequest,
     current_user: Optional[dict] = Depends(get_current_user)
 ):
-    """Approve a survey"""
+    """
+    Approve a survey and send notification email
+    
+    Request Body:
+    - recipient_email: Email address to send the form link to
+    - custom_message: Optional custom message to include in the email
+    
+    Behavior:
+    1. Mark survey as approved
+    2. Record approver and approval timestamp
+    3. Send email with form URL to recipient
+    
+    Status Validation:
+    - Survey must be in 'draft' or 'pending-approval' status
+    - Already approved surveys cannot be re-approved
+    """
     if not current_user:
         raise HTTPException(status_code=401, detail="Authentication required")
     
+    # Find the survey
     survey = next((s for s in surveys_db if s["id"] == survey_id), None)
     if not survey:
         raise HTTPException(status_code=404, detail="Survey not found")
     
+    # Validate status transition
+    current_status = survey.get("status", "draft")
+    if current_status == "approved":
+        raise HTTPException(
+            status_code=400, 
+            detail="Survey is already approved. Cannot approve again."
+        )
+    elif current_status == "archived":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot approve an archived survey."
+        )
+    
+    # Check if form URL exists
+    if not survey.get("form_url"):
+        raise HTTPException(
+            status_code=400,
+            detail="Survey does not have a Google Form URL. Cannot approve."
+        )
+    
+    # Update survey status
     survey["status"] = "approved"
     survey["approvedAt"] = datetime.utcnow().isoformat()
     survey["approver"] = current_user.get("email")
     
-    return survey
+    # Send approval email
+    email_sent = False
+    try:
+        email_sent = await email_service.send_approval_email(
+            recipient_email=approval.recipient_email,
+            survey_title=survey["title"],
+            form_url=survey["form_url"],
+            approver_name=current_user.get("name", current_user.get("email")),
+            custom_message=approval.custom_message
+        )
+    except Exception as e:
+        print(f"⚠️ Error sending email: {e}")
+        # Continue even if email fails
+    
+    return {
+        **survey,
+        "message": "Survey approved successfully",
+        "email_sent": email_sent,
+        "email_recipient": approval.recipient_email
+    }
 
 # --- RUN THE SERVER ---
 if __name__ == "__main__":

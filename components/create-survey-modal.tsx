@@ -77,7 +77,6 @@ export function CreateSurveyModal({ onClose, onSubmit }: CreateSurveyModalProps)
   const [formData, setFormData] = useState({
     title: "",
     description: "",
-    candidateEmails: "",
     questions: "",
   })
   const [fileName, setFileName] = useState("")
@@ -101,14 +100,48 @@ export function CreateSurveyModal({ onClose, onSubmit }: CreateSurveyModalProps)
     setError(null)
 
     try {
+      // Check file type
+      const fileType = file.type
+      const fileName = file.name.toLowerCase()
+      
+      // Handle Excel files (.xlsx, .xls)
+      if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls') || 
+          fileType.includes('spreadsheet') || fileType.includes('excel')) {
+        setError("Excel files are not yet supported. Please use plain text (.txt) or JSON (.json) files, or enter questions manually.")
+        setFileName("")
+        return
+      }
+      
+      // Handle CSV files
+      if (fileName.endsWith('.csv') || fileType === 'text/csv') {
+        const text = await file.text()
+        // Parse CSV - assume first column contains questions
+        const lines = text.split('\n').map(line => {
+          // Simple CSV parsing - take first column
+          const firstColumn = line.split(',')[0].trim()
+          return firstColumn.replace(/^["']|["']$/g, '') // Remove quotes
+        }).filter(line => line.length > 0)
+        
+        setPreview(lines)
+        setFormData({ ...formData, questions: lines.join("\n") })
+        return
+      }
+
+      // Handle text files
       const text = await file.text()
       let questions: string[] = []
 
-      if (file.name.endsWith(".json")) {
+      if (fileName.endsWith(".json")) {
         const json = JSON.parse(text)
-        questions = json.questions || []
+        questions = Array.isArray(json) ? json.map(q => q.title || q.question || String(q)) : (json.questions || [])
       } else {
+        // Plain text file
         questions = parseQuestions(text)
+      }
+
+      if (questions.length === 0) {
+        setError("No questions found in file. Please check the file format.")
+        return
       }
 
       setPreview(questions)
@@ -116,6 +149,7 @@ export function CreateSurveyModal({ onClose, onSubmit }: CreateSurveyModalProps)
     } catch (err) {
       console.error("[v0] File parse error:", err)
       setError("Failed to parse file. Please ensure it is valid JSON or plain text.")
+      setFileName("")
     }
   }
 
@@ -142,31 +176,9 @@ export function CreateSurveyModal({ onClose, onSubmit }: CreateSurveyModalProps)
       return
     }
 
-    if (!formData.candidateEmails.trim()) {
-      setError("At least one candidate email is required")
-      return
-    }
-
     const questions = parseQuestions(formData.questions)
     if (questions.length === 0) {
       setError("Please enter at least one question")
-      return
-    }
-
-    const emails = formData.candidateEmails
-      .split("\n")
-      .map((email) => email.trim())
-      .filter((email) => email.length > 0)
-
-    if (emails.length === 0) {
-      setError("Please enter at least one valid email address")
-      return
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-    const invalidEmails = emails.filter((email) => !emailRegex.test(email))
-    if (invalidEmails.length > 0) {
-      setError(`Invalid email addresses: ${invalidEmails.join(", ")}`)
       return
     }
 
@@ -174,11 +186,13 @@ export function CreateSurveyModal({ onClose, onSubmit }: CreateSurveyModalProps)
     setError(null)
 
     try {
+      // Format questions as text blob for backend parsing
+      const questionsText = questions.join("\n")
+      
       await onSubmit({
         title: formData.title,
         description: formData.description,
-        candidateEmails: emails,
-        questions: questions,
+        questions: questionsText, // Send as text blob
       })
     } catch (err) {
       console.error("[v0] Submit error:", err)
@@ -236,12 +250,6 @@ export function CreateSurveyModal({ onClose, onSubmit }: CreateSurveyModalProps)
                     <p className="text-foreground">{formData.description}</p>
                   </div>
                 )}
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">Candidate Emails ({preview.length})</p>
-                  <p className="text-foreground text-sm">
-                    {formData.candidateEmails.split("\n").filter((e) => e.trim()).length} recipients
-                  </p>
-                </div>
               </div>
             </div>
 
@@ -300,22 +308,6 @@ export function CreateSurveyModal({ onClose, onSubmit }: CreateSurveyModalProps)
               />
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-2">
-                Candidate Email List * (one per line)
-              </label>
-              <textarea
-                value={formData.candidateEmails}
-                onChange={(e) => {
-                  setFormData({ ...formData, candidateEmails: e.target.value })
-                  setError(null)
-                }}
-                placeholder="john@example.com&#10;jane@example.com&#10;bob@example.com"
-                rows={4}
-                className="w-full px-4 py-2 rounded-lg bg-background border border-border text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary font-mono text-sm"
-              />
-            </div>
-
             {method === "file" && (
               <div>
                 <label className="block text-sm font-medium text-foreground mb-2">Select File</label>
@@ -324,10 +316,10 @@ export function CreateSurveyModal({ onClose, onSubmit }: CreateSurveyModalProps)
                     <UploadIconSmall />
                   </div>
                   <p className="font-medium text-foreground mb-1">Drop your file here</p>
-                  <p className="text-sm text-muted-foreground mb-4">or click to browse (CSV, JSON)</p>
+                  <p className="text-sm text-muted-foreground mb-4">or click to browse (TXT, JSON, CSV)</p>
                   <input
                     type="file"
-                    accept=".json,.csv,.txt"
+                    accept=".json,.csv,.txt,text/plain,application/json,text/csv"
                     className="hidden"
                     id="file-input"
                     onChange={handleFileUpload}
@@ -336,6 +328,15 @@ export function CreateSurveyModal({ onClose, onSubmit }: CreateSurveyModalProps)
                     Browse Files
                   </Button>
                   {fileName && <p className="text-xs text-muted-foreground mt-2">Selected: {fileName}</p>}
+                </div>
+                <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-900">
+                  <p className="font-medium mb-1">📄 Supported formats:</p>
+                  <ul className="list-disc list-inside space-y-1 text-xs">
+                    <li><strong>TXT:</strong> One question per line</li>
+                    <li><strong>JSON:</strong> Array of question objects</li>
+                    <li><strong>CSV:</strong> Questions in first column</li>
+                  </ul>
+                  <p className="mt-2 text-xs italic">⚠️ Excel files (.xlsx, .xls) are not supported. Please convert to TXT or CSV first.</p>
                 </div>
               </div>
             )}
