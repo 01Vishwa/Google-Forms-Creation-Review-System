@@ -19,6 +19,11 @@ yarn-error.log*
 # env files
 .env*
 
+# Google OAuth credentials - NEVER COMMIT
+backend/credentials-oauth.json
+backend/credentials.json
+backend/token.json
+
 # vercel
 .vercel
 
