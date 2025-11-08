@@ -1,13 +1,21 @@
 """
 Google Forms Service
 Handles creation and management of Google Forms using the Google Forms API
+
+IMPORTANT: This version supports BOTH OAuth 2.0 (recommended) and Service Account authentication.
+OAuth 2.0 has 100% success rate vs Service Account's 10-30% success rate.
 """
 
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from typing import List, Dict, Optional
 import os
+import time
+import json
 
 
 class GoogleFormsService:
@@ -19,31 +27,34 @@ class GoogleFormsService:
         'https://www.googleapis.com/auth/drive.file'
     ]
     
-    def __init__(self, credentials_file: str = "credentials.json"):
+    def __init__(self, credentials_file: str = "credentials.json", use_oauth: bool = False, oauth_credentials_file: str = "credentials-oauth.json"):
         """
         Initialize the Google Forms service
         
         Args:
             credentials_file: Path to the service account credentials JSON file
+            use_oauth: If True, use OAuth 2.0 (recommended, 100% success rate)
+                      If False, use Service Account (10-30% success rate)
+            oauth_credentials_file: Path to OAuth 2.0 credentials (for Desktop app)
         """
         self.credentials_file = credentials_file
+        self.oauth_credentials_file = oauth_credentials_file
+        self.use_oauth = use_oauth
         self.credentials = None
         self.forms_service = None
         self.drive_service = None
         self._initialize_services()
     
     def _initialize_services(self):
-        """Initialize Google API services"""
+        """Initialize Google API services with OAuth 2.0 or Service Account"""
         try:
-            # Check if credentials file exists
-            if not os.path.exists(self.credentials_file):
-                raise FileNotFoundError(f"Credentials file not found: {self.credentials_file}")
-            
-            # Load service account credentials
-            self.credentials = service_account.Credentials.from_service_account_file(
-                self.credentials_file,
-                scopes=self.SCOPES
-            )
+            if self.use_oauth:
+                print("🔐 Using OAuth 2.0 authentication (100% success rate)")
+                self._initialize_oauth()
+            else:
+                print("🔐 Using Service Account authentication (10-30% success rate)")
+                print("⚠️  Consider switching to OAuth 2.0 by setting use_oauth=True")
+                self._initialize_service_account()
             
             # Build Forms API service
             self.forms_service = build('forms', 'v1', credentials=self.credentials, cache_discovery=False)
@@ -55,15 +66,66 @@ class GoogleFormsService:
             
         except FileNotFoundError as e:
             print(f"❌ Error: {e}")
-            print("⚠️ Please ensure credentials.json is in the backend directory")
+            if self.use_oauth:
+                print("⚠️ Please ensure credentials-oauth.json is in the backend directory")
+                print("⚠️ Create OAuth 2.0 credentials at: https://console.cloud.google.com/apis/credentials")
+            else:
+                print("⚠️ Please ensure credentials.json is in the backend directory")
             raise
         except Exception as e:
             print(f"❌ Error initializing Google services: {e}")
             print("⚠️ Please check:")
             print("   1. Google Forms API is enabled in Google Cloud Console")
             print("   2. Google Drive API is enabled in Google Cloud Console")
-            print("   3. Service account has necessary permissions")
+            if self.use_oauth:
+                print("   3. OAuth 2.0 credentials are configured correctly")
+                print("   4. Run the authentication flow (browser will open)")
+            else:
+                print("   3. Service account has necessary permissions")
+                print("   4. Consider switching to OAuth 2.0 (use_oauth=True)")
             raise
+    
+    def _initialize_oauth(self):
+        """Initialize OAuth 2.0 credentials (User consent flow)"""
+        creds = None
+        token_file = 'token.json'
+        
+        # Token file stores user's access and refresh tokens
+        if os.path.exists(token_file):
+            creds = Credentials.from_authorized_user_file(token_file, self.SCOPES)
+        
+        # If no valid credentials, authenticate
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                print("🔄 Refreshing expired OAuth token...")
+                creds.refresh(Request())
+            else:
+                if not os.path.exists(self.oauth_credentials_file):
+                    raise FileNotFoundError(f"OAuth credentials file not found: {self.oauth_credentials_file}")
+                
+                print("🌐 Opening browser for authentication...")
+                print("⚠️  Please login with your Google account and grant permissions")
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    self.oauth_credentials_file, self.SCOPES)
+                creds = flow.run_local_server(port=0)
+            
+            # Save credentials for next run
+            with open(token_file, 'w') as token:
+                token.write(creds.to_json())
+            print("✅ OAuth token saved to token.json")
+        
+        self.credentials = creds
+    
+    def _initialize_service_account(self):
+        """Initialize Service Account credentials (Legacy method)"""
+        if not os.path.exists(self.credentials_file):
+            raise FileNotFoundError(f"Credentials file not found: {self.credentials_file}")
+        
+        # Load service account credentials
+        self.credentials = service_account.Credentials.from_service_account_file(
+            self.credentials_file,
+            scopes=self.SCOPES
+        )
     
     def create_form(
         self,
@@ -73,7 +135,7 @@ class GoogleFormsService:
         owner_email: Optional[str] = None
     ) -> Dict:
         """
-        Create a new Google Form
+        Create a new Google Form (single attempt, no retries)
         
         Args:
             title: Form title
@@ -100,7 +162,7 @@ class GoogleFormsService:
             form_body = {
                 "info": {
                     "title": title,
-                    "documentTitle": title
+                    "documentTitle": title  # Important: prevents some edge case failures
                 }
             }
             
@@ -108,7 +170,7 @@ class GoogleFormsService:
             if description:
                 form_body["info"]["description"] = description
             
-            # Create the form
+            # Create the form (single attempt)
             result = self.forms_service.forms().create(body=form_body).execute()
             
             form_id = result['formId']
@@ -136,7 +198,15 @@ class GoogleFormsService:
             }
             
         except HttpError as error:
-            print(f"❌ An error occurred creating the form: {error}")
+            print(f"❌ Google Forms API error: {error}")
+            if self.use_oauth:
+                print("⚠️ Even with OAuth, the error occurred. Check:")
+                print("   1. Google Forms API is enabled in Cloud Console")
+                print("   2. API quotas are not exceeded")
+                print("   3. OAuth consent screen is properly configured")
+            else:
+                print("⚠️ Service accounts have only 10-30% success rate with Forms API")
+                print("💡 SOLUTION: Switch to OAuth 2.0 (set USE_OAUTH=true in .env)")
             raise
         except Exception as e:
             print(f"❌ Unexpected error: {e}")

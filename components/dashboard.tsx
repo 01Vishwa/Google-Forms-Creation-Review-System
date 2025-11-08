@@ -135,18 +135,26 @@ export function Dashboard() {
 
   const handleCreateSurvey = async (surveyData: any) => {
     try {
-      await surveysAPI.create(surveyData)
+      const response = await surveysAPI.create(surveyData)
+      
+      // Check if Google Form was created
+      const formCreated = response.form_created || response.form_url
+      const message = response.message || "Survey created! Awaiting review."
+      
       toast({
-        title: "Success",
-        description: "Survey created! Awaiting review.",
+        title: formCreated ? "Success" : "Survey Created",
+        description: formCreated 
+          ? message 
+          : "Survey created successfully. Note: Google Forms integration is not available. To enable it, add credentials-oauth.json to the backend directory.",
       })
       fetchSurveys()
       setShowCreateModal(false)
-    } catch (err) {
+    } catch (err: any) {
       console.error("[v0] Failed to create survey:", err)
+      const errorMsg = err.response?.data?.detail || "Failed to create survey. Please try again."
       toast({
         title: "Error",
-        description: "Failed to create survey. Please try again.",
+        description: errorMsg,
         variant: "destructive",
       })
     }

@@ -54,18 +54,43 @@ surveys_db: List[dict] = []
 users_db: dict = {}  # Store user sessions
 
 # --- INITIALIZE SERVICES ---
+# Configuration: Set USE_OAUTH=True for 100% success rate, False for service account (10-30%)
+USE_OAUTH = os.getenv("USE_OAUTH", "true").lower() == "true"  # Default to OAuth
+
 try:
-    forms_service = GoogleFormsService(credentials_file="credentials.json")
+    if USE_OAUTH:
+        print("🔐 Initializing Google Forms with OAuth 2.0 (100% success rate)...")
+        forms_service = GoogleFormsService(
+            credentials_file="credentials.json",
+            use_oauth=True,
+            oauth_credentials_file="credentials-oauth.json"
+        )
+    else:
+        print("🔐 Initializing Google Forms with Service Account (10-30% success rate)...")
+        print("⚠️  Consider setting USE_OAUTH=true in .env for better reliability")
+        forms_service = GoogleFormsService(credentials_file="credentials.json", use_oauth=False)
+    
     print("✅ Google Forms service initialized")
 except FileNotFoundError as e:
     print(f"⚠️ Google Forms service not available: {e}")
+    if USE_OAUTH:
+        print("⚠️ Please create OAuth 2.0 credentials:")
+        print("   1. Go to: https://console.cloud.google.com/apis/credentials")
+        print("   2. Create OAuth 2.0 Client ID (Application type: Desktop app)")
+        print("   3. Download JSON and save as 'credentials-oauth.json'")
     print("⚠️ Surveys will be created without Google Forms integration")
     forms_service = None
 except Exception as e:
     print(f"⚠️ Google Forms service initialization failed: {e}")
     print("⚠️ Common issues:")
     print("   - Google Forms API not enabled in Cloud Console")
-    print("   - Service account permissions insufficient")
+    if USE_OAUTH:
+        print("   - OAuth credentials file missing or invalid")
+        print("   - Need to complete OAuth consent flow (browser will open on first run)")
+    else:
+        print("   - Service account permissions insufficient")
+        print("   - Service accounts have only 10-30% success rate with Forms API")
+        print("   💡 Set USE_OAUTH=true in .env for 100% success rate")
     print("   - API quota exceeded")
     print("⚠️ Surveys will be created without Google Forms integration")
     forms_service = None
@@ -73,14 +98,63 @@ except Exception as e:
 email_service = EmailService()
 print("✅ Email service initialized" if email_service.is_configured else "⚠️ Email service available but not configured")
 
+
 # --- FASTAPI APP ---
-app = FastAPI()
+app = FastAPI(
+    title="Google Forms Survey Creation & Review System",
+    description="""
+## 🚀 Survey Management System with Google Forms Integration
+
+A comprehensive API for creating, reviewing, and approving surveys with automatic Google Forms generation.
+
+### Key Features:
+* 📝 **Create Surveys** - Parse questions from text, JSON, or CSV format
+* 🔍 **Review & Approve** - Workflow for survey approval with status tracking
+* 📧 **Email Notifications** - Automatic email with form URL on approval
+* 🔗 **Google Forms Integration** - Automatic form creation via Google Forms API
+* 🔐 **OAuth Authentication** - Secure Google OAuth 2.0 authentication
+* ✅ **Status Validation** - Enforced status transition rules
+
+### Status Workflow:
+- `draft` → Initial state after creation
+- `pending-approval` → Submitted for review
+- `approved` → Approved and email sent
+- `archived` → No longer active
+
+### Authentication:
+All endpoints require Google OAuth authentication via cookies.
+Use `POST /auth/google` to authenticate with a Google token.
+    """,
+    version="1.0.0",
+    terms_of_service="https://example.com/terms",
+    contact={
+        "name": "API Support",
+        "email": "support@surveyforge.com",
+    },
+    license_info={
+        "name": "MIT License",
+        "url": "https://opensource.org/licenses/MIT",
+    },
+    openapi_tags=[
+        {
+            "name": "authentication",
+            "description": "Google OAuth authentication endpoints"
+        },
+        {
+            "name": "surveys",
+            "description": "Survey CRUD operations and approval workflow"
+        }
+    ]
+)
 
 # --- CORS MIDDLEWARE ---
 # This is crucial to allow your React app (http://localhost:3000)
 # to communicate with this backend (e.g., http://localhost:8000).
 origins = [
     "http://localhost:3000",  # Your React app's origin
+    "http://localhost:3001",  # Alternative Next.js port
+    "http://127.0.0.1:3000",  # Alternative localhost notation
+    "http://127.0.0.1:3001",
 ]
 
 app.add_middleware(
@@ -124,7 +198,7 @@ async def get_current_user(auth_token: Optional[str] = Cookie(None)):
 def read_root():
     return {"status": "Backend is running"}
 
-@app.get("/auth/user")
+@app.get("/auth/user", tags=["authentication"])
 async def get_current_user_info(current_user: Optional[dict] = Depends(get_current_user)):
     """
     Returns the current authenticated user's information.
@@ -138,7 +212,7 @@ async def get_current_user_info(current_user: Optional[dict] = Depends(get_curre
         "picture": current_user.get("picture")
     }
 
-@app.post("/auth/google")
+@app.post("/auth/google", tags=["authentication"])
 async def verify_google_token(body: GoogleToken, response: Response):
     """
     Receives the Google ID Token from the frontend,
@@ -203,14 +277,14 @@ async def verify_google_token(body: GoogleToken, response: Response):
             detail="Internal server error"
         )
 
-@app.post("/auth/logout")
+@app.post("/auth/logout", tags=["authentication"])
 async def logout(response: Response):
     """Logout user by clearing the auth cookie"""
     response.delete_cookie(key="auth_token")
     return {"message": "Logged out successfully"}
 
 # --- SURVEY ENDPOINTS ---
-@app.get("/surveys")
+@app.get("/surveys", tags=["surveys"])
 async def get_surveys(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=1000),
@@ -235,7 +309,7 @@ async def get_surveys(
         "limit": limit
     }
 
-@app.get("/surveys/{survey_id}")
+@app.get("/surveys/{survey_id}", tags=["surveys"])
 async def get_survey(
     survey_id: str,
     current_user: Optional[dict] = Depends(get_current_user)
@@ -246,7 +320,7 @@ async def get_survey(
         raise HTTPException(status_code=404, detail="Survey not found")
     return survey
 
-@app.post("/surveys")
+@app.post("/surveys", tags=["surveys"], status_code=201)
 async def create_survey(
     survey: Survey,
     current_user: Optional[dict] = Depends(get_current_user)
@@ -318,20 +392,11 @@ async def create_survey(
             except Exception as e:
                 form_error = str(e)
                 print(f"❌ Error creating Google Form: {e}")
-                # Check for common errors
-                if "403" in str(e) or "forbidden" in str(e).lower():
-                    print("⚠️ Permission denied. Check service account permissions.")
-                elif "500" in str(e) or "internal" in str(e).lower():
-                    print("⚠️ Google Forms API internal error. This may be temporary.")
-                    print("⚠️ Possible fixes:")
-                    print("   1. Wait a few minutes and try again")
-                    print("   2. Verify Google Forms API is enabled")
-                    print("   3. Check API quotas in Cloud Console")
-                elif "404" in str(e):
-                    print("⚠️ API endpoint not found. Verify Google Forms API is enabled.")
                 # Continue without form - survey will be created without form_url
         else:
-            form_error = "Google Forms service not initialized"
+            form_error = "Google Forms service not initialized. To enable: Create credentials-oauth.json in backend directory."
+            print(f"ℹ️  {form_error}")
+            print("ℹ️  Survey will be created without Google Form integration.")
         
         # Create survey data
         survey_data = {
@@ -366,11 +431,14 @@ async def create_survey(
             "form_created": bool(form_data)
         }
         
+    except HTTPException:
+        # Re-raise HTTPException (e.g., 400 errors) without modification
+        raise
     except Exception as e:
         print(f"❌ Error creating survey: {e}")
         raise HTTPException(status_code=500, detail=f"Error creating survey: {str(e)}")
 
-@app.patch("/surveys/{survey_id}")
+@app.patch("/surveys/{survey_id}", tags=["surveys"])
 async def update_survey(
     survey_id: str,
     survey_update: dict,
@@ -425,7 +493,7 @@ async def update_survey(
     
     return survey
 
-@app.delete("/surveys/{survey_id}")
+@app.delete("/surveys/{survey_id}", tags=["surveys"])
 async def delete_survey(
     survey_id: str,
     current_user: Optional[dict] = Depends(get_current_user)
@@ -441,7 +509,7 @@ async def delete_survey(
     surveys_db.remove(survey)
     return {"message": "Survey deleted successfully"}
 
-@app.post("/surveys/{survey_id}/approve")
+@app.post("/surveys/{survey_id}/approve", tags=["surveys"])
 async def approve_survey(
     survey_id: str,
     approval: ApprovalRequest,

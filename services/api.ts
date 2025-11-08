@@ -91,11 +91,17 @@ let isDemoMode = false
 export const authAPI = {
   googleLogin: async (token: string) => {
     try {
+      console.log("[v0] Attempting to connect to backend at:", API_BASE_URL)
       const response = await apiClient.post("/auth/google", { token })
       isDemoMode = false
       return response.data
-    } catch (error) {
+    } catch (error: any) {
       console.error("[v0] Backend error during Google login:", error)
+      console.error("[v0] Error details:", error.message, error.code)
+      if (error.code === 'ERR_NETWORK') {
+        console.error("[v0] Network Error - Backend may not be running at:", API_BASE_URL)
+        console.error("[v0] Please ensure backend is running: cd backend && python -m uvicorn app:app --reload --port 8000")
+      }
       console.debug("[v0] Falling back to demo mode")
       isDemoMode = true
       // Return demo user data
